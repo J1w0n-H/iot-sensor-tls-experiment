@@ -1,211 +1,182 @@
-# 🔬 experiments.md: RTOS Performance Exploration – Task Design, Core Allocation, and Real-Time Scheduling
 
-This document focuses on the **real-time operating system (RTOS)** experimentation aspect of the IoT project, while also addressing observed **network-related behaviors** that influenced real-time performance. It details the system design, benchmarking strategy, timing behavior, and network environment limitations affecting dual-core ESP32 telemetry under FreeRTOS.
+# 🔬 experiment_rtos.md: RTOS Performance & Network Behavior
 
----
+**ESP32 + FreeRTOS + MQTT (with/without TLS/mTLS)**
 
-## 🎯 RTOS Experiment Goals
-
-As IoT devices scale in complexity, they must balance:
-- **Determinism** (guaranteed timing)
-- **Concurrency** (parallel task execution)
-- **Resource constraints** (limited memory/CPU)
-
-This study explores:
-- ✅ Task-to-core mappings and their effects on publish latency
-- ✅ Real-time scheduling integrity under encryption and Wi-Fi load
-- ✅ ESP32's handling of mutex, timer, and Wi-Fi stack in real-world traffic
-- ✅ How network characteristics (e.g., mobile hotspot) degrade timing precision
+**Task Mapping · Real-Time Scheduling · Packet Reliability Analysis**
 
 ---
 
-## ⚙️ RTOS System Design
+## 🧭 Purpose & Motivation
 
-### 📋 Task Structure
+This experiment was driven by two questions that emerged during development:
 
-```c
+1. **Why does core pinning sometimes make publish timing worse, not better?**
+2. **Why are MQTT packets dropped intermittently under mTLS, even when scheduling is correct?**
+
+Through systematic testing and Wireshark packet analysis, the goal was to isolate the performance bottlenecks — whether they arise from RTOS scheduling, TLS overhead, or network-layer behavior.
+
+---
+
+## ⚙️ System Overview
+
+- **Platform**: ESP32-WROOM (dual-core)
+- **OS**: FreeRTOS
+- **Sensor**: BME680 (Temp, Humidity, Pressure, Gas)
+- **Broker**: Mosquitto 2.x on Ubuntu 22.04
+- **Protocol**: MQTT (over TCP / TLS / Mutual TLS)
+- **Network**: Wi-Fi (via 4G mobile hotspot, IPv6 NAT)
+
+### Task Structure:
+
+```cpp
 xTaskCreatePinnedToCore(SensorReadTask, "SensorTask", 4096, NULL, 1, NULL, 0);
 xTaskCreatePinnedToCore(MqttPublishTask, "MQTTPublish", 4096, NULL, 1, NULL, 1);
 ```
 
-- `SensorTask`: Reads BME680 every 1s with `vTaskDelayUntil()`
-- `MQTTPublishTask`: Publishes JSON over MQTT with optional TLS
-- `SemaphoreHandle_t sensorDataMutex` used for data integrity
-
-### 🔁 Synchronization
-- `xSemaphoreTake()` before accessing sensor buffer
-- `xSemaphoreGive()` after publish to prevent data collision
+- `SensorTask`: Reads sensor data every 1s (`vTaskDelayUntil`)
+- `MQTTPublishTask`: Publishes JSON-encoded payloads to broker
+- Shared buffer protected by `SemaphoreHandle_t`
 
 ---
 
-## 🧪 Test Scenarios
+## 🧪 Experimental Matrix
 
-Each test ran 300 seconds with:
-- `millis()` before/after `client.publish()`
-- Average publish time = `(total time) / (successful publishes)`
+| Case | TLS | Core Mapping | Avg Publish Time | Successful Publishes |
+| --- | --- | --- | --- | --- |
+| 1 | ❌ | Unpinned | 3.46 ms | 619 |
+| 2 | ❌ | Sensor=0, MQTT=1 | 17.96 ms | 622 |
+| 3 | ✅ | Unpinned | 2.00 ms | 642 |
+| 4 | ✅ | Sensor=0, MQTT=1 | 3.44 ms | 642 |
+| B1 | ✅ | Sensor=1, MQTT=0 | 2.00 ms | 581 |
+| B2 | ❌ | Sensor=1, MQTT=0 | 1.84 ms | 580 |
 
-All tests used fixed topic, QoS=0, and 1Hz publish rate:
+**Timing:** Measured with `millis()` before/after `client.publish()`
 
-| Case | TLS | Core Pinned | Description |
-|------|-----|-------------|-------------|
-| 1    | ❌  | ❌          | Unpinned baseline |
-| 2    | ❌  | ✅          | Sensor=Core0, MQTT=Core1 |
-| 3    | ✅  | ❌          | TLS enabled, unpinned |
-| 4    | ✅  | ✅          | TLS + pinned: Sensor=Core0, MQTT=Core1 |
-| B1   | ✅  | ✅ (Swapped)| Sensor=Core1, MQTT=Core0 |
-| B2   | ❌  | ✅ (Swapped)| Sensor=Core1, MQTT=Core0 |
+**Duration:** 300 seconds per run
 
----
-
-## 📊 Publish Time Results
-
-| Case | TLS | Core Config       | Avg Time | Publishes |
-|------|-----|--------------------|----------|-----------|
-| 1    | ❌  | Unpinned           | 3.46 ms  | 619       |
-| 2    | ❌  | Sensor=0, MQTT=1   | 17.96 ms | 622       |
-| 3    | ✅  | Unpinned           | 2.00 ms  | 642       |
-| 4    | ✅  | Sensor=0, MQTT=1   | 3.44 ms  | 642       |
-| B1   | ✅  | Sensor=1, MQTT=0   | 2.00 ms  | 581       |
-| B2   | ❌  | Sensor=1, MQTT=0   | 1.84 ms  | 580       |
-
-### Measurement Notes
-- `millis()` used inside MQTT publish task
-- Timing included TLS encryption + Wi-Fi I/O + OS delay
-- `vTaskDelayUntil()` maintained timing intervals at 1Hz
+**Frequency:** 1 Hz publish cycle (`vTaskDelayUntil()`)
 
 ---
 
-## 🌐 Network Behavior Observations
+## 📈 1. Latency (Speed) Analysis
 
-Although RTOS performance was the main focus, **network conditions** had visible effects:
+### ✅ Key Observations
 
-### 🛰️ Network Setup
-- All experiments ran over **mobile hotspot (4G)** with NAT + DHCP bridge
-- Broker (Ubuntu) and ESP32 both connected to same Wi-Fi SSID
+- TLS/mTLS incurred **only ~1ms overhead** — acceptable for real-time use
+- **Core pinning without consideration of Wi-Fi stack placement** led to severe performance drops
+- Swapping `MQTTPublishTask` to Core 0 (same as Wi-Fi driver) drastically improved latency
 
-### 🔎 Wireshark Insights
-- ESP32 sent periodic MQTT publishes at 1Hz
-- Under load, observed:
-  - **Retransmissions** (likely Wi-Fi interference)
-  - **Duplicate ACKs** from server
-  - **Out-of-Order** packet arrivals
-- Delay clusters appeared ~2–4s apart (bursty latency)
+### 🧠 Deeper Analysis
 
-### ❗ Hotspot Limitations
-- Inconsistent latency during TLS handshake (up to ~400ms)
-- Higher variance in ACK arrival time
-- Performance degradation not from ESP32/RTOS but **network jitter**
+ESP32's Wi-Fi stack executes on **Core 0**. When `MQTTPublishTask` runs on **Core 1**, it leads to:
 
-### ✏️ Example Issue
-```bash
-Previous segment not captured
-Spurious Retransmission
-Dup ACK #5
+- Cross-core **cache coherence issues**
+- **Mutex contention** across tasks
+- Interrupts and driver context-switching across cores
+- Possible **socket buffer misalignment** or queue delays
+
+```c
+// Problematic:
+SensorTask → Core 0
+MQTTPublishTask → Core 1
+
+// Optimal:
+SensorTask → Core 1
+MQTTPublishTask → Core 0
+
 ```
-These logs confirm inconsistent delivery paths over hotspot
 
-### 🔧 Interpretation
-- TLS did not cause major delay by itself
-- Performance bottlenecks often arose from **wireless retransmission**
-- Core pinning made things worse when Wi-Fi stack and MQTT ran on separate cores
+> ❗ The MQTT task must stay on Core 0 to stay close to the Wi-Fi stack.
+> 
 
 ---
 
-## 🧠 RTOS Behavior Summary
+## 📉 2. Stability (Reliability) Analysis
 
-- `vTaskDelayUntil()` upheld 1Hz scheduling ±2ms jitter
-- Mutex-protected data shared cleanly between tasks
-- Default pinning (MQTT=Core1) clashed with Wi-Fi stack (Core0)
-- Swapping fixed cache + scheduling stalls
-- Network instability can mask scheduler accuracy unless isolated
+### 📡 Graphana Results
 
----
-
-## ✅ Final Recommendations
-
-- ✅ Avoid benchmarking over mobile hotspots if precise timing matters
-- ✅ Use Wi-Fi channels with minimal interference
-- ✅ Place MQTT task on **Core 0** (Wi-Fi context)
-- ✅ Use `esp_timer_get_time()` for finer-grain timing if needed
+- Even when latency was low, **Grafana showed dropped points and bursty delivery**
+- Intermittent **data gaps** of 1–4 seconds, regardless of core configuration
+- **TLS-enabled** cases had *more stable timing* than plaintext — possibly due to session-level buffering
 
 ---
 
-## 💡 Conclusion
+### 🧪 Wireshark Observations
 
-RTOS timing and core mapping analysis reveals that:
-- FreeRTOS performs well under constrained conditions
-- Real-world networks introduce variability that overshadows OS behavior
-- Accurate real-time telemetry requires both OS-level tuning and **network-aware design**
+| Symptom | Interpretation |
+| --- | --- |
+| Duplicate ACKs | Broker didn't receive full segment or was delayed |
+| Retransmissions | ESP32 re-sent packet (common under load) |
+| Spurious Retransmissions | Packet resent after successful delivery |
+| Out-of-order delivery | Delayed arrival or reordering over unstable Wi-Fi |
+| Previous segment not captured | Packet dropped (or not captured by Wireshark) |
+| Empty MQTT publish payload | Possibly malformed retransmission or zero-length msg |
+| PDU reassembly of multiple publishes | Nagle buffering or Wi-Fi delay |
 
-> "In RTOS systems, the scheduler might be perfect—but the network never is."
+Example:
 
+```yaml
+MQTT Publish – No payload visible
+TCP Segment Len: 121
+Conversation: Incomplete
 
-ESP32 sent periodic MQTT publishes at 1Hz
+```
 
-Under load, observed:
+---
 
-Retransmissions (likely Wi-Fi interference)
+## 🌐 Network Context
 
-Duplicate ACKs from server
+- **Network Type**: 4G Mobile Hotspot (IPv6 NAT)
+- **Limitations**:
+    - Unpredictable RTT
+    - NAT queueing behavior
+    - Signal strength fluctuation
+    - No control over congestion or retransmission policies
 
-Out-of-Order packet arrivals
+> ❗ Even with perfectly timed publish cycles, network jitter distorted delivery
+> 
 
-Delay clusters appeared ~2–4s apart (bursty latency)
+---
 
-❗ Hotspot Limitations
+## 🧠 Summary of Key Insights
 
-Inconsistent latency during TLS handshake (up to ~400ms)
+### 🔹 Latency
 
-Higher variance in ACK arrival time
+| ✅ What Worked Well | ⚠️ What Hurt Performance |
+| --- | --- |
+| TLS overhead was minimal (<2 ms) | Core pinning without Wi-Fi awareness |
+| Core 0 aligned with MQTT improved speed | Separate cores created cache/mutex issues |
 
-Performance degradation not from ESP32/RTOS but network jitter
+### 🔹 Stability
 
-✏️ Example Issue
+| ✅ What Helped | ⚠️ What Broke It |
+| --- | --- |
+| TLS stabilized burst timing slightly | Mobile hotspot introduced dropouts, jitter |
+| `vTaskDelayUntil()` kept local timing | Packet loss occurred in network → not RTOS |
 
-Previous segment not captured
-Spurious Retransmission
-Dup ACK #5
+---
 
-These logs confirm inconsistent delivery paths over hotspot
+## ❓ Questions for Further Validation
 
-🔧 Interpretation
+1. Are **empty MQTT publish packets** normal? Could they indicate send buffer underflow or retransmission?
+2. Can **publish burst behavior** be controlled? Is it caused by Nagle's algorithm?
+3. Would **TCP_NODELAY** on ESP32 WiFiClient help reduce packet coalescing?
+4. Are there **LwIP diagnostics or socket-level counters** available on ESP32 for retransmit/drop tracking?
+5. How can I confirm whether loss occurs **on ESP32**, **in transit**, or **at the broker**?
 
-TLS did not cause major delay by itself
+---
 
-Performance bottlenecks often arose from wireless retransmission
+## ✅ Recommendations
 
-Core pinning made things worse when Wi-Fi stack and MQTT ran on separate cores
+| Category | Suggestion |
+| --- | --- |
+| Task Affinity | Pin MQTT to Core 0 (same as Wi-Fi stack) |
+| Benchmark Env | Use dedicated Wi-Fi AP (not hotspot) for testing |
+| Timing Tools | Use `esp_timer_get_time()` for higher resolution |
+| TCP Behavior | Try disabling Nagle (set TCP_NODELAY) |
+| Diagnostics | Log publish results + add drop counters manually |
 
-🧠 RTOS Behavior Summary
+---
 
-vTaskDelayUntil() upheld 1Hz scheduling ±2ms jitter
-
-Mutex-protected data shared cleanly between tasks
-
-Default pinning (MQTT=Core1) clashed with Wi-Fi stack (Core0)
-
-Swapping fixed cache + scheduling stalls
-
-Network instability can mask scheduler accuracy unless isolated
-
-✅ Final Recommendations
-
-✅ Avoid benchmarking over mobile hotspots if precise timing matters
-
-✅ Use Wi-Fi channels with minimal interference
-
-✅ Place MQTT task on Core 0 (Wi-Fi context)
-
-✅ Use esp_timer_get_time() for finer-grain timing if needed
-
-💡 Conclusion
-
-RTOS timing and core mapping analysis reveals that:
-
-FreeRTOS performs well under constrained conditions
-
-Real-world networks introduce variability that overshadows OS behavior
-
-Accurate real-time telemetry requires both OS-level tuning and network-aware design
-
-"In RTOS systems, the scheduler might be perfect—but the network never is."
+Thank you!
