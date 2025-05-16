@@ -1,62 +1,184 @@
 
+# 🔧 RTOS Meets TLS: Real-Time Secure Telemetry for IoT Systems
 
-## 🧪 Experiment Summary
-
-We conducted a series of experiments to evaluate:
-
-1. **RTOS Task Scheduling** (Core-pinned vs. non-pinned)
-2. **MQTT Performance** with and without TLS
-3. **Security Comparison**:
-   - No authentication
-   - ID/PW only (username/password auth)
-   - Mutual TLS (mTLS)
+> ESP32 + FreeRTOS + MQTT over TLS/mTLS
+> 
+> 
+> Real-time scheduling meets network security — under constrained hardware, unstable networks, and tight deadlines.
+> 
 
 ---
 
-## ⏱ Benchmark Table
+## 📌 Project Overview
 
-| Experiment ID | TLS Enabled | Core Pinned | Avg Publish Time |
-|---------------|-------------|-------------|------------------|
-| Exp-1         | ✅ Yes      | ✅ Yes      | 2.16 ms          |
-| Exp-2         | ❌ No       | ✅ Yes      | 2.88 ms          |
-| Exp-3         | ❌ No       | ❌ No       | 1.94 ms          |
-| Exp-4         | ✅ Yes      | ❌ No       | 2.01 ms          |
+This project explores a critical challenge in embedded systems and IoT:
 
-> **Interpretation**:
-> - TLS overhead is minimal on ESP32, but present (~0.2–0.9 ms increase).
-> - Core-pinning causes more cache overhead, especially for shared memory + mutex access.
+> Can a real-time operating system (RTOS) on a resource-constrained device reliably send encrypted telemetry data over unstable networks without violating timing guarantees?
+> 
 
----
+To answer this, I built and benchmarked a full system on ESP32 using FreeRTOS and MQTT, with optional TLS/mTLS security.
 
-## 🔐 Security Experiment
+**Key questions:**
 
-| Setup                | Result                               | Notes                                      |
-|----------------------|--------------------------------------|--------------------------------------------|
-| No Auth              | ❌ Unauthorized clients can connect  | Vulnerable to DoS and data injection       |
-| Username/Password    | ⚠️ Brute-force possible             | Passwords visible unless TLS is used       |
-| Mutual TLS (mTLS)    | ✅ Only valid clients allowed         | Client certs verified by server            |
+- 🔁 Does adding TLS or Mutual TLS break the real-time performance of the system?
+- 🧩 How does core assignment (core affinity) affect task timing under dual-core RTOS?
+- 🌐 How do real-world network conditions (e.g., mobile hotspot) influence reliability?
 
-- Simulated MITM attack using Burp Suite
-  - 🔍 Observed client disconnection under mTLS
-  - 🧪 TLS handshake fails with forged client cert
-- Observed session rejection logs in `mosquitto.log`
+This was implemented and evaluated as part of the course **ENPM818J – Real-Time Operating Systems** at the University of Maryland.
 
 ---
 
-## 📊 Visualization Snapshots
+## 🧠 Motivation
 
-| Scenario               | Grafana Snapshot                               |
-|------------------------|------------------------------------------------|
-| TLS + Core Pinning     | ![TLS-Pinned](docs/grafana_tls_pinned.png)     |
-| No TLS + No Pinning    | ![Fastest Case](docs/grafana_fastest_case.png) |
-| Unauthorized Access    | ![Blocked Client](docs/mosquitto_block.png)    |
+IoT systems are expected to be:
+
+- **Real-time**: react within strict timing windows
+- **Secure**: protect data against MITM and forgery
+- **Resilient**: tolerate jitter, congestion, and poor networks
+
+But embedded devices like ESP32 have:
+
+- Limited CPU, RAM, and buffer capacity
+- Complex Wi-Fi stack behavior
+- Constraints in encryption, especially under dual-core concurrency
+
+This project quantifies and visualizes those tradeoffs.
 
 ---
 
-## 📌 Conclusion
+## 🧪 System Architecture
 
-- **TLS + RTOS** systems can handle encryption overhead within tight deadlines (~2ms).
-- **Mutual TLS** significantly increases MQTT security and should be default in sensitive deployments.
-- Core-pinning does not guarantee speed gains; scheduler flexibility often performs better.
+```
+[SensorReadTask] --(mutex)--> [MQTTPublishTask] --TLS/mTLS--> Mosquitto Broker
+         |                         |
+      Core 1                   Core 0 (Wi-Fi stack)
+
+```
+
+- **FreeRTOS** dual-core scheduler
+- Sensor task and MQTT publish task run in parallel
+- Shared buffer protected via semaphore
+- Data sent at 1 Hz via MQTT (QoS 0)
+- Publish loop wrapped with TLS or mTLS (client cert + server CA)
+- Benchmarked publish time, successful sends, and Wireshark packet traces
 
 ---
+
+## 📊 What Was Measured
+
+### 📈 RTOS Task Performance
+
+- Publish timing (with/without TLS)
+- Core pinned vs unpinned vs core-swapped
+- Synchronization delay due to semaphores
+
+### 📉 Network Reliability
+
+- Packet loss, retransmission, and ACK behavior via Wireshark
+- mTLS certificate handshake behavior
+- Impact of hotspot vs local Wi-Fi
+
+### 📊 Visualization
+
+- Grafana dashboard for real-time sensor data
+- Gaps, delay spikes, and bursty delivery patterns analyzed
+
+---
+
+## 📂 Repository Structure
+
+```
+graphql
+CopyEdit
+.
+├── README.md                    # Project overview (this file)
+├── experiments.md               # RTOS performance and task-core mapping results
+├── experiment_network.md        # (coming soon) mTLS, MITM, and attack simulation
+├── src/                         # ESP32 C++ source code (FreeRTOS + MQTT logic)
+├── certs/                       # Auto-generated certs (Root CA, server, client)
+├── grafana/                     # Example dashboard JSON export
+├── images/                      # Architecture, packet trace, screenshots
+└── docs/                        # Supplemental notes or scripts
+
+```
+
+---
+
+## 🔍 Key Findings
+
+✅ TLS on ESP32 adds <2ms overhead thanks to hardware crypto
+
+❌ Core pinning (MQTT=Core1) worsens performance (~18ms publish time)
+
+✅ Swapping MQTT to Core 0 (Wi-Fi aligned) improves latency (~1.8ms)
+
+⚠️ TLS helps consistency, but packet drops still occur
+
+❗ Real bottleneck = mobile hotspot → unstable RTT, NAT buffering, packet loss
+
+> “RTOS scheduling can be perfect — but the network never is.”
+> 
+
+---
+
+## 📦 Technologies Used
+
+| Category | Tools / Frameworks |
+| --- | --- |
+| Microcontroller | ESP32-WROOM |
+| OS | FreeRTOS (dual-core, tasks, semaphores) |
+| Protocol | MQTT 3.1.1 (PubSubClient) |
+| Security | OpenSSL (Root CA, TLS/mTLS certs) |
+| Networking | Wi-Fi (via mobile hotspot) |
+| Broker | Mosquitto on Ubuntu |
+| Monitoring | Wireshark + Grafana + InfluxDB |
+
+---
+
+## 📌 Coming Next: `experiment_network.md`
+
+This upcoming section will focus on:
+
+- **TLS vs mTLS** latency comparison
+- **Unauthorized client denial**
+- **MITM attack simulation** using Burp Suite
+- **Certificate forgery attempts**
+- Broker rejection logs + mTLS validation behavior
+
+---
+
+## 🙋 Future Improvements
+
+- Log publish success/failure at the application level
+- Capture retransmission count on ESP32 (LwIP stack, socket diagnostics)
+- Compare wired vs wireless real-time performance
+- Add replay attack defense (broker-side logic)
+
+---
+
+## 👤 Author
+
+**Jiwon Hwang**
+
+Graduate student in Cybersecurity Engineering
+
+University of Maryland (ENPM818J – Spring 2025)
+
+📧 jhwang97@umd.edu
+
+---
+
+## 📎 For Reviewers
+
+This project aims to contribute not only as a functional IoT pipeline, but as an **educational case study** on integrating:
+
+- RTOS scheduling
+- TLS cryptographic overhead
+- Core-to-task mapping
+- Real-world network dynamics
+
+For feedback or collaboration inquiries, feel free to reach out!
+
+---
+
+Thank you!
