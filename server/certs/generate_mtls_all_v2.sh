@@ -7,7 +7,7 @@ SERVER_CN="localhost"
 CLIENT_CN="esp32client"
 SERVER_IP="172.20.10.10"
 CERT_DIR="./"
-HEADER_FILE="certificates.h"
+HEADER_FILE="certificates_$CLIENT_CN.h"
 
 echo "📁 Working in $CERT_DIR"
 cd "$CERT_DIR"
@@ -47,12 +47,12 @@ cat > client_ext.cnf <<EOF
 extendedKeyUsage = clientAuth
 EOF
 
-openssl genrsa -out esp32client.key 2048
-openssl req -new -key esp32client.key \
+openssl genrsa -out telegraf.key 2048
+openssl req -new -key telegraf.key \
   -subj "/C=US/ST=MD/L=UMD/O=IoTDevices/CN=$CLIENT_CN" \
-  -out esp32client.csr
-openssl x509 -req -in esp32client.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
-  -out esp32client.crt -days 365 -sha256 -extfile client_ext.cnf
+  -out telegraf.csr
+openssl x509 -req -in telegraf.csr -CA ca.crt -CAkey ca.key -CAcreateserial \
+  -out telegraf.crt -days 365 -sha256 -extfile client_ext.cnf
 
 # === [5] 권한 설정 ===
 echo "🔧 Setting file permissions..."
@@ -69,8 +69,8 @@ for VAR in ca_cert client_cert client_key; do
   FILE=""
   case $VAR in
     ca_cert) FILE="ca.crt";;
-    client_cert) FILE="esp32client.crt";;
-    client_key) FILE="esp32client.key";;
+    client_cert) FILE="telegraf.crt";;
+    client_key) FILE="telegraf.key";;
   esac
 
   echo "const char* $VAR = " >> "$HEADER_FILE"
@@ -80,6 +80,6 @@ for VAR in ca_cert client_cert client_key; do
 done
 
 echo "✅ Done! All files generated:"
-ls -lh ca.* server.* esp32client.* "$HEADER_FILE"
+ls -lh ca.* server.* telegraf.* "$HEADER_FILE"
 
 
