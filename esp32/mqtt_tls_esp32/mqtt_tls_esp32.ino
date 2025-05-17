@@ -9,10 +9,10 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"  // For RTOS mutex (mutual exclusion)
 
-#define USE_TLS true           // Enable TLS (set to false for plaintext MQTT)
-#define USE_CORE_PINNING false  // Use core-pinning for real concurrency (Sensor=Core 0, MQTT=Core 1)
+#define SEC 0           // 0: Plain, 1: ID/PW, 2: TLS, 3: mTLS
+#define USE_CORE_PINNING true  // Use core-pinning for real concurrency (Sensor=Core 0, MQTT=Core 1)
 #define INTERVAL_MS 100        // Sensor read + publish interval in milliseconds
-#define BENCH_TIME_MS 180000   // Benchmark duration (e.g., 5 min = 300,000 ms)
+#define BENCH_TIME_MS 300000   // Benchmark duration (e.g., 5 min = 300,000 ms)
 
 // Wi-Fi credentials
 const char* ssid = "Jiwon";
@@ -34,12 +34,12 @@ struct SensorData {
 
 SensorData sensorData;
 
-#if USE_TLS
+#if (SEC == 2 || SEC == 3)
 WiFiClientSecure espClient;
-const int mqtt_port = 8883;  // TLS port
+const int mqtt_port = 8883;
 #else
 WiFiClient espClient;
-const int mqtt_port = 1883;  // Non-TLS port
+const int mqtt_port = 1883;
 #endif
 
 PubSubClient client(espClient);
@@ -80,13 +80,18 @@ void connectToWiFi() {
 }
 
 void settingTLS() {
-#if USE_TLS
-  Serial.println("🔐 TLS Enabled: Setting certificates...");
+#if (SEC == 2 || SEC == 3)
+  Serial.println("🔐 TLS Enabled: Loading certificates...");
   espClient.setCACert(ca_cert);
+#endif
+
+#if (SEC == 3)
   espClient.setCertificate(client_cert);
   espClient.setPrivateKey(client_key);
-#else
-  Serial.println("🔓 TLS Disabled: Using insecure MQTT");
+#endif
+
+#if (SEC == 0 || SEC == 1)
+  Serial.println("🔓 TLS Disabled: Using plain MQTT over TCP");
 #endif
 }
 
@@ -94,7 +99,15 @@ void connectToMQTT() {
   client.setServer(mqtt_server, mqtt_port);
   while (!client.connected()) {
     String clientId = "ESP32Client-" + String(random(0xffff), HEX);
-    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
+
+    bool connected = false;
+    if (SEC == 1 || SEC == 2) {
+      connected = client.connect(clientId.c_str(), mqtt_user, mqtt_password);
+    } else {
+      connected = client.connect(clientId.c_str());
+    }
+
+    if (connected) {
       Serial.println("✅ MQTT connected");
     } else {
       Serial.printf("❌ MQTT failed, rc=%d ➜ %s\n", client.state(), getMqttErrorMessage(client.state()).c_str());
@@ -102,7 +115,6 @@ void connectToMQTT() {
     }
   }
 }
-
 void SensorReadTask(void *parameter) {
   Serial.println("🌡️ Initializing BME680 sensor...");
   if (!bme.begin()) {
@@ -177,7 +189,14 @@ void MqttPublishTask(void *parameter) {
       }
     } else if (!benchmarkDone) {
       Serial.println("\n===== 📊 Benchmark Summary =====");
-      Serial.printf("TLS: %s, Core pinned: %s\n", USE_TLS ? "true" : "false", USE_CORE_PINNING ? "true" : "false");
+      const char* sec_mode =
+        (SEC == 0) ? "Plain MQTT (No Auth)" :
+        (SEC == 1) ? "Plain MQTT + ID/PW" :
+        (SEC == 2) ? "TLS (Server-only)" :
+                    "mTLS (Mutual TLS)";
+      Serial.printf("🔐 Security Mode: %s, Core pinned: %s\n", sec_mode, USE_CORE_PINNING ? "true" : "false");
+
+
       Serial.printf("🔁 Total successful publishes: %d\n", successfulPublishes);
       Serial.printf("⏱ Total time: %.2f seconds\n", (millis() - benchmarkStartTime) / 1000.0);
       Serial.printf("📉 Average publish time: %.2f ms\n", (float)totalPublishTime / successfulPublishes);
@@ -196,8 +215,8 @@ void setup() {
   xMutex = xSemaphoreCreateMutex();
 
   if (USE_CORE_PINNING) {
-    xTaskCreatePinnedToCore(SensorReadTask, "SensorTask", 4096, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(MqttPublishTask, "MQTTPublish", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(SensorReadTask, "SensorTask", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(MqttPublishTask, "MQTTPublish", 4096, NULL, 1, NULL, 0);
   } else {
     xTaskCreate(SensorReadTask, "SensorTask", 4096, NULL, 1, NULL);
     xTaskCreate(MqttPublishTask, "MQTTPublish", 4096, NULL, 1, NULL);
