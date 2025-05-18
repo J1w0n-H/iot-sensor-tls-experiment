@@ -1,0 +1,12 @@
+[req]
+distinguished_name=req
+x509_extensions=v3_req
+[req_distinguished_name]
+[ v3_req ]
+subjectAltName = @alt_names
+keyUsage = digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+[ alt_names ]
+DNS.1 = localhost
+IP.1 = 127.0.0.1
+IP.2 = 172.20.10.10
