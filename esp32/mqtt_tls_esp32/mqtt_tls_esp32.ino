@@ -3,14 +3,14 @@
 #include <PubSubClient.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
-#include "certificates.h"  // TLS certificates for secure MQTT communication
+#include "MITM_certificates_esp32client.h"  // TLS certificates for secure MQTT communication
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"  // For RTOS mutex (mutual exclusion)
 
-#define SEC 0           // 0: Plain, 1: ID/PW, 2: TLS, 3: mTLS
-#define USE_CORE_PINNING true  // Use core-pinning for real concurrency (Sensor=Core 0, MQTT=Core 1)
+#define SEC 2           // 0: Plain, 1: ID/PW, 2: TLS, 3: mTLS
+#define USE_CORE_PINNING false  // Use core-pinning for real concurrency (Sensor=Core 0, MQTT=Core 1)
 #define INTERVAL_MS 100        // Sensor read + publish interval in milliseconds
 #define BENCH_TIME_MS 300000   // Benchmark duration (e.g., 5 min = 300,000 ms)
 
@@ -82,7 +82,8 @@ void connectToWiFi() {
 void settingTLS() {
 #if (SEC == 2 || SEC == 3)
   Serial.println("🔐 TLS Enabled: Loading certificates...");
-  espClient.setCACert(ca_cert);
+  //espClient.setCACert(ca_cert);
+  espClient.setInsecure();
 #endif
 
 #if (SEC == 3)
@@ -117,16 +118,32 @@ void connectToMQTT() {
 }
 void SensorReadTask(void *parameter) {
   Serial.println("🌡️ Initializing BME680 sensor...");
-  if (!bme.begin()) {
-    Serial.println("❌ Sensor not found. Halting");
-    while (true);
+  Serial.println("Trying BME680 at address 0x77...");
+  
+  if (!bme.begin(0x77)) {
+    Serial.println("❌ BME680 not found. Halting");
+    while (true) { vTaskDelay(1000); }
   }
-
+  
+  Serial.println("✅ BME680 initialized! Configuring...");
+  
+  // 설정 단계마다 디버그 출력 추가
+  Serial.println("Setting temperature oversampling...");
   bme.setTemperatureOversampling(BME680_OS_8X);
+  
+  Serial.println("Setting humidity oversampling...");
   bme.setHumidityOversampling(BME680_OS_2X);
+  
+  Serial.println("Setting pressure oversampling...");
   bme.setPressureOversampling(BME680_OS_4X);
+  
+  Serial.println("Setting IIR filter...");
   bme.setIIRFilterSize(BME680_FILTER_SIZE_3);
+  
+  Serial.println("Setting gas heater...");
   bme.setGasHeater(320, 150);
+  
+  Serial.println("✅ BME680 configuration complete!");
 
   while (true) {
     if (!bme.performReading()) {
@@ -147,8 +164,15 @@ void SensorReadTask(void *parameter) {
 }
 
 void MqttPublishTask(void *parameter) {
+  Serial.println("👉 Starting MQTT task...");
+  
+  Serial.println("👉 Connecting to WiFi...");
   connectToWiFi();
+  
+  Serial.println("👉 Setting up TLS...");
   settingTLS();
+  
+  Serial.println("👉 Connecting to MQTT broker...");
   connectToMQTT();
 
   unsigned long start, end;
@@ -210,6 +234,7 @@ void MqttPublishTask(void *parameter) {
 
 void setup() {
   Serial.begin(115200);
+  Wire.begin(); // I2C 버스 초기화 추가
   delay(1000);
   Serial.println("🚀 Starting MQTT TLS RTOS Benchmark...");
   xMutex = xSemaphoreCreateMutex();
