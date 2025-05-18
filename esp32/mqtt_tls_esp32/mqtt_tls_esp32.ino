@@ -3,7 +3,7 @@
 #include <PubSubClient.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME680.h>
-#include "MITM_certificates_esp32client.h"  // TLS certificates for secure MQTT communication
+#include "fake-server.h"  // TLS certificates for secure MQTT communication
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -82,8 +82,10 @@ void connectToWiFi() {
 void settingTLS() {
 #if (SEC == 2 || SEC == 3)
   Serial.println("🔐 TLS Enabled: Loading certificates...");
-  //espClient.setCACert(ca_cert);
-  espClient.setInsecure();
+  espClient.setCACert(ca_cert);
+  //espClient.setInsecure();
+  Serial.println("CA Cert Begins:");
+  Serial.println(ca_cert);
 #endif
 
 #if (SEC == 3)
