@@ -92,13 +92,23 @@ graphql
 CopyEdit
 .
 ├── README.md                    # Project overview (this file)
-├── experiments.md               # RTOS performance and task-core mapping results
-├── experiment_network.md        # (coming soon) mTLS, MITM, and attack simulation
-├── src/                         # ESP32 C++ source code (FreeRTOS + MQTT logic)
-├── certs/                       # Auto-generated certs (Root CA, server, client)
-├── grafana/                     # Example dashboard JSON export
-├── images/                      # Architecture, packet trace, screenshots
-└── docs/                        # Supplemental notes or scripts
+├── experiment_rtos.md          # Detailed analysis of RTOS + MQTT TLS performance
+├── docs/                       # Supplemental notes or scripts
+├── esp32/
+│   └── mqtt_tls_esp32/         # ESP32 firmware source
+│       ├── mqtt_tls_esp32.ino  # Main Arduino source file
+│       ├── certificates_esp32client.h
+│       ├── fake-server.h
+├── grafana/                    # Grafana dashboard JSONs (time-series visualization)
+├── image/                      # Screenshots for Wireshark, Grafana, and system diagrams
+├── index/                      # (unspecified, possibly for logging or indexing)
+├── scripts/
+│   └── make_cert_h.sh          # Script to generate certificates_*.h
+├── server/
+│   ├── certs/                  # Root CA, client/server certificates and keys
+│   ├── mosquitto/              # Mosquitto TLS/mTLS configs
+│   ├── telegraf/               # Telegraf configs per security mode
+│   └── socat/                  # MITM test configs and fake CA infrastructure
 
 ```
 
