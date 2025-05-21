@@ -1,145 +1,218 @@
-
 # experiment_rtos.md
 
-## 1. Experimental Goals
+## **1. Experimental Goals**
 
-- Measure how TLS and mutual TLS (mTLS) impact real-time MQTT publishing performance on an ESP32 using FreeRTOS.
-- Determine the effect of core pinning (task-to-core assignment) on timing consistency and task interference.
-- Identify the performance threshold of publish intervals (down to 100ms) in a dual-core RTOS environment.
-- Evaluate whether task separation, mutex protection, and TLS overhead preserve real-time constraints (e.g., 1Hz or faster).
-
----
-
-## 2. Hypotheses
-
-- TLS introduces minimal overhead due to ESP32's hardware acceleration and should not violate soft real-time constraints.
-- Pinned tasks may suffer synchronization delays due to inter-core mutex contention.
-- 100ms publish intervals may start to exceed system throughput, causing message drops or increased jitter.
-- Unpinned tasks will yield better publish consistency due to dynamic load balancing across cores.
+- Quantify the performance cost of TLS/mTLS in a FreeRTOS-based dual-core ESP32 system.
+- Evaluate whether secure telemetry can maintain real-time constraints.
+- Analyze how task placement (core pinning), mutual exclusion (mutex), and encryption interact.
+- Identify bottlenecks across client, network, and server.
 
 ---
 
-## 3. System Configuration
+## **2. Hypotheses and Questions**
 
-### 3.1 Hardware
-
-- ESP32 DevKitC v1 with dual-core FreeRTOS
-- BME680 environmental sensor via I2C
-- MQTT Broker: Ubuntu 22.04 host with Mosquitto (TLS/mTLS configured)
-- Network: Mobile hotspot with NAT to simulate latency and jitter
-
-### 3.2 Software
-
-- Firmware: Arduino-based FreeRTOS with separate tasks:
-  - `SensorReadTask` → collects data and writes to shared struct
-  - `MqttPublishTask` → publishes data over MQTT with optional TLS/mTLS
-- Shared data protected with `xSemaphoreCreateMutex()`
-- TLS via `WiFiClientSecure` using PEM-formatted certificates
-- Real-time interval control via `vTaskDelay(pdMS_TO_TICKS(INTERVAL_MS))`
-- Publish timing benchmark via `millis()` and logging
+- H1: Core pinning improves performance via parallel task execution.
+- H2: TLS introduces minimal delay but improves reliability.
+- H3: TLS + pinning yields the best balance under constrained resources.
+- H4: Retransmissions and bursty traffic correlate with mutex contention or Wi-Fi instability.
 
 ---
 
-## 4. Experimental Matrix
+## **3. System Configuration**
 
-| Case ID | TLS Enabled | Core Pinned | Interval | Description |
-|---------|-------------|-------------|----------|-------------|
-| C1      | No          | No          | 1000ms   | Plain MQTT baseline |
-| C2      | Yes (TLS)   | No          | 1000ms   | TLS without pinning |
-| C3      | Yes (TLS)   | Yes         | 1000ms   | TLS with core pinning |
-| C4      | No          | Yes         | 1000ms   | Plain MQTT with core pinning |
-| C5      | Yes (TLS)   | No          | 100ms    | TLS + fast publish |
-| C6      | Yes (TLS)   | Yes         | 100ms    | TLS + pinning + fast interval |
+### **3.1 Hardware**
 
----
+- ESP32 DevKitC v1 (dual-core)
+- BME680 Sensor (I2C)
+- Wi-Fi via mobile hotspot (NAT)
+- Mosquitto broker (Ubuntu 22.04)
 
-## 5. Raw Results (Per Case)
+### **3.2 Software**
 
-| Case | Avg Publish Time | Success Rate | Notes |
-|------|------------------|---------------|-------|
-| C1   | 4.70 ms          | 559 / 600     | Plain MQTT, frequent reconnects |
-| C2   | 2.01 ms          | 580 / 580     | TLS stable, minimal overhead |
-| C3   | 2.16 ms          | 580 / 580     | Slight delay due to pinning |
-| C4   | 2.88 ms          | 580 / 580     | Pinning without TLS still introduces latency |
-| C5   | >5 ms (spikes)   | 400 / 580     | 100ms interval shows instability |
-| C6   | Dropped packets  | <100 / 580    | Core pinning + 100ms → worst results |
+- FreeRTOS with:
+    - `SensorReadTask` (data acquisition)
+    - `MqttPublishTask` (TLS or plain MQTT)
+- TLS via `WiFiClientSecure` with PEM certs
+- Synchronization via `xSemaphoreTake/Give`
+- Benchmarks via `millis()`, total publish time, success count
 
 ---
 
-## 6. Visualization
+## **4. Experimental Matrix**
 
-- Grafana dashboard connected to InfluxDB via Telegraf (`mqtt_consumer` input)
-- Dashboards show:
-  - C1: visible gaps, reconnects
-  - C2–C4: smooth time-series plots
-  - C5–C6: missing points, bursty updates
-
----
-
-## 7. Packet-Level Analysis
-
-- C1: All MQTT packets in plaintext (including ID/PW and payload)
-- C2/C3/C5/C6: TLS handshake (ClientHello → ServerHello → Certificate → Finished)
-- Core-pinned TLS cases showed slight delays in ACK and Application Data compared to unpinned
+| Case | TLS | Core Pinned | Interval | Description |
+| --- | --- | --- | --- | --- |
+| C1 | ❌ | ❌ | 1000ms | Plain MQTT baseline |
+| C2 | ❌ | ✅ | 1000ms | Plain MQTT + pinned |
+| C3 | ✅ | ❌ | 1000ms | TLS, unpinned |
+| C4 | ✅ | ✅ | 1000ms | TLS + core pinned |
+| B1 | ✅ | ✅ (Swapped) | 1000ms | TLS + pinned (swapped cores) |
+| B2 | ❌ | ✅ (Swapped) | 1000ms | Plain + pinned (swapped cores) |
 
 ---
 
-## 8. Root Cause Analysis
+## **5. Raw Results**
 
-### 8.1 Client-side
+![rtos (15).png](image/rtos/rtos_(15).png)
 
-- Sensor and MQTT tasks contend over mutex in core-pinned case
-- Fast intervals (100ms) exceed I/O and task switching ability
+## Case1) TLS: False, Core pinned: False
 
-### 8.2 Network-side
+![image.png](image/rtos/image.png)
 
-- Mobile hotspot introduced NAT delays and TCP retransmissions
-- No advanced congestion controls applied
+![image.png](image/rtos/image%201.png)
 
-### 8.3 Server-side
+## Case2) TLS: False, Core pinned: True
 
-- Mosquitto behaved consistently; no CPU or memory issues
-- TLS handshake failures logged properly under mTLS
+![image.png](image/rtos/image%202.png)
+
+![image.png](image/rtos/image%203.png)
+
+## Case3) TLS: True Core pinned: False
+
+![image.png](image/rtos/image%204.png)
+
+![image.png](image/rtos/image%205.png)
+
+## Case4) TLS: True, Core pinned: True
+
+![image.png](image/rtos/image%206.png)
+
+![image.png](image/rtos/image%207.png)
+
+## Bonus1: TLS: True, Core pinned: True, Core Swapped
+
+![image.png](image/rtos/image%208.png)
+
+![image.png](image/rtos/image%209.png)
+
+## Bonus2: TLS: False, Core pinned: True, Core Swapped
+
+![image.png](image/rtos/image%2010.png)
+
+![image.png](image/rtos/image%2011.png)
+
+| Case | Avg Time | Success | Notes |
+| --- | --- | --- | --- |
+| C1 | 3.46 ms | 619 | Plain, unpinned |
+| C2 | 17.96 ms | 622 | Pinning degraded performance |
+| C3 | 2.00 ms | 642 | TLS outperformed expectations |
+| C4 | 3.44 ms | 642 | TLS + pinning stable |
+| B1 | 2.00 ms | 581 | TLS + pinned + core swap improved |
+| B2 | 1.84 ms | 580 | Fastest: plain + pinned + core swap |
+
+---
+
+## **6. Visualization**
+
+- Grafana Dashboard (5s refresh)
+- C1: visible delays
+- C3/C4/B1: stable TLS telemetry
+- C2: delays due to poor core assignment
+- TCP flow captured via Wireshark and InfluxDB
 
 ---
 
-## 9. Comparative Insights
+## **7. Packet-Level Analysis**
 
-| Rank | Configuration        | Performance | Stability | Notes |
-|------|----------------------|-------------|-----------|-------|
-| 🥇   | C2: TLS, No Pinning  | Excellent   | Stable    | Best real-time profile |
-| 🥈   | C3: TLS + Pinned     | Good        | Stable    | Slight delay from core contention |
-| 🥉   | C1: No TLS, No Pin   | Poor        | Unstable  | Frequent reconnects |
-| 🛑   | C6: TLS + Pinned + 100ms | Unusable | Fails often | Too aggressive timing |
+![image.png](image/rtos/image%2012.png)
 
----
+![image.png](image/rtos/image%2013.png)
 
-## 10. Design Implications
+Normal
 
-- FreeRTOS with TLS is capable of maintaining soft real-time constraints.
-- Core pinning should be used carefully; mutexes across cores can introduce jitter.
-- 1Hz intervals are safe with TLS; sub-500ms intervals require tuning and testing.
-- Task separation and mutex protection enabled modularity and fault isolation.
+![image.png](image/rtos/image%2014.png)
 
----
+Abnormal
 
-## 11. Configuration Optimization
+- Spurious Retransmissions (e.g., pkt 25910, 27388)
+- Bursty MQTT frames (e.g., pkt 27477)
 
-| Parameter       | Recommended Value   | Rationale |
-|-----------------|---------------------|-----------|
-| INTERVAL_MS     | ≥ 500ms             | Safe range for ESP32 tasks |
-| Core Assignment | Sensor = Core0, MQTT = Core1 | Avoid same-core mutex conflict |
-| TLS Version     | TLS 1.2             | Stable, supported by ESP32 |
-| MQTT QoS        | 0 or 1              | Low overhead, sufficient for sensors |
-| Buffering       | Mutex + NotifyGive  | Lightweight and thread-safe |
+![image.png](image/rtos/image%2015.png)
+
+- Repeated Duplicate ACKs (e.g., 25912)
 
 ---
 
-## 12. Future Experiments
+## **8. Root Cause Analysis**
 
-- QoS 1 vs QoS 2 delivery in TLS/mTLS mode
-- ECC certificate use for handshake performance
-- Add simulated attacks (DoS, replay, auth failures)
-- Compare performance over wired Ethernet or Wi-Fi 6
+### **8.1 Client-Side**
+
+- Blocking on `xSemaphoreTake(...)` when tasks not scheduled optimally
+- Fast intervals + mutex = delay amplification
+- ESP32 Wi-Fi stack interference on Core 0
+
+### **8.2 Network-Side**
+
+- Mobile hotspot caused burst latency + retransmits
+- Spurious retransmissions due to delayed ACKs
+
+### **8.3 Server-Side**
+
+- Mosquitto processed TLS reliably
+- TCP window size was sufficient
+- Telegraf consumed bursty traffic consistently
 
 ---
+
+## **9. Comparative Insights**
+
+| Configuration | Avg Time | Notes |
+| --- | --- | --- |
+| B2: Plain, pinned swap | 1.84 ms | Fastest overall |
+| C3: TLS, unpinned | 2.00 ms | Very stable |
+| B1: TLS, pinned swap | 2.00 ms | Fast and secure |
+| C4: TLS, pinned | 3.44 ms | Acceptable |
+| C1: Plain, unpinned | 3.46 ms | Baseline |
+| C2: Plain, pinned | 17.96 ms | Inefficient core assignment |
+
+---
+
+## **10. Design Implications**
+
+- Core affinity matters: TLS works best when MQTT runs on Wi-Fi’s core.
+- TLS overhead is negligible with ESP32 crypto acceleration.
+- Pinning can harm performance if Wi-Fi and app compete on same core.
+- Best designs pin sensor to Core1, MQTT to Core0 (Wi-Fi stack alignment)
+
+---
+
+## **11. Configuration Optimization**
+
+| Setting | Recommended | Justification |
+| --- | --- | --- |
+| INTERVAL_MS | ≥500 ms | Avoid mutex + task drift |
+| Core Assignment | Sensor → Core1MQTT → Core0 | Wi-Fi alignment |
+| TLS | Enable (v1.2) | Secure with minimal cost |
+| Synchronization | mutex + notify | Light and safe |
+
+---
+
+## **12. Future Experiments**
+
+- QoS 0 vs 1 delivery under loss
+- ECC certificates for smaller footprint
+- Replay attack resistance on mTLS
+- Wi-Fi signal loss + reconnect behavior
+
+---
+
+## **📌 Key Discoveries**
+
+1. **Core swapping reversed poor performance**
+    
+    Original: Sensor=Core0, MQTT=Core1 → Bad
+    
+    Swapped: Sensor=Core1, MQTT=Core0 → Fastest
+    
+2. **TLS is safe**
+    
+    TLS added negligible latency across all benchmarks.
+    
+3. **Pinning only helps if mapped correctly**
+    
+    Pinning can degrade if MQTT is blocked by Wi-Fi stack contention.
+    
+
+---
+
+Thank you!
