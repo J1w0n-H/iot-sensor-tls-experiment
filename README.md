@@ -47,6 +47,7 @@ This project quantifies and visualizes those tradeoffs.
 ---
 
 ## 🧪 System Architecture
+![image.png](Real-Time IoT Data Pipeline.png)
 
 ```
 [SensorReadTask] --(mutex)--> [MQTTPublishTask] --TLS/mTLS--> Mosquitto Broker
